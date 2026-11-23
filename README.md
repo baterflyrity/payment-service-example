@@ -2,38 +2,47 @@
 
 Асинхронный микросервис приёма и обработки платежей. Проект демонстрирует REST API на FastAPI, хранение состояния в PostgreSQL, надёжную публикацию событий через **Transactional Outbox**, обработку сообщений в RabbitMQ и уведомление клиента через webhook.
 
-
 ## Возможности
 
 - Создание платежа и получение его статуса через REST API.
 - Аутентификация статическим API-ключом в `X-API-Key`.
 - Идемпотентность запросов по `Idempotency-Key` с проверкой идентичности данных.
 - Асинхронное хранение событий в Outbox в одной транзакции с платежом.
-- Публикация событий в RabbitMQ с возможностью повторной отправки после сбоя брокера.
-- Consumer на FastStream: имитация платёжного шлюза (2–5 секунд; 90% `succeeded`, 10% `failed`).
-- Повторная доставка после технических ошибок с задержками 2 и 4 секунды; затем сообщение попадает в DLQ.
+- Отдельный процесс `outbox-relay` публикует события в RabbitMQ; неопубликованные события переотправляются после сбоя брокера.
+- Consumer на FastStream: имитация платёжного шлюза (2–5 секунд; 90% `succeeded`, 10% `failed`), повтор обработки после технических ошибок, DLQ.
 - Webhook с результатом обработки платежа.
 - Миграции Alembic и контейнерный запуск через Docker Compose.
-- Unit-, интеграционные API- и end-to-end тесты.
+- Unit-, интеграционные, e2e- и архитектурные тесты.
 
 ## Архитектура
+
+### Слои
+
+```text
+entrypoints → application → domain ← infrastructure
+```
+
+- `domain/` — чистые dataclass-сущности, value objects, доменные события, ошибки и порты (Protocol). Не зависит от SQLAlchemy, FastAPI, Pydantic, FastStream и httpx.
+- `application/` — use case'ы (создание, чтение, обработка платежа, relay outbox). Знает только домен и порты.
+- `infrastructure/` — SQLAlchemy-маппинг и репозитории, Unit of Work, RabbitMQ-публикатор и топология, эмулятор шлюза, отправка webhook.
+- `entrypoints/` — FastAPI-приложение, consumer и процесс relay; Pydantic DTO живут только здесь.
+
+Доступ к БД идёт только через репозитории, транзакции — только через Unit of Work. `AsyncSession`/`sqlalchemy` не импортируются вне `infrastructure/`; это проверяется архитектурным тестом.
 
 ### Компоненты и связи
 
 ```mermaid
 flowchart LR
     Client[Клиент] -->|HTTP + API key| API[FastAPI API]
-    API -->|Одна транзакция| DB[(PostgreSQL)]
-    DB --- Payments[Таблица payments]
-    DB --- Outbox[Таблица outbox]
-    Outbox -->|Опрос неопубликованных событий| Publisher[Outbox publisher]
-    Publisher -->|payments.new| Rabbit[(RabbitMQ)]
-    Rabbit --> Consumer[FastStream consumer]
+    API -->|Одна транзакция: payments + outbox| DB[(PostgreSQL)]
+    Relay[outbox-relay] -->|FOR UPDATE SKIP LOCKED, затем публикация и published_at| DB
+    Relay -->|exchange payments, RK payments.new| Rabbit[(RabbitMQ)]
+    Rabbit -->|очередь payments.new| Consumer[FastStream consumer]
     Consumer -->|Чтение и обновление статуса| DB
     Consumer -->|HTTP POST с результатом| Webhook[Webhook клиента]
-    Consumer -->|Техническая ошибка| Retry[Retry queues: TTL 2s / 4s]
-    Retry -->|Dead-letter routing| Rabbit
-    Consumer -->|Третья неудачная попытка| DLQ[(payments.dlq)]
+    Consumer -->|Техническая ошибка| Retry[payments.retry.1 / .2<br/>TTL 2 с / 4 с]
+    Retry -->|DLX payments| Rabbit
+    Consumer -->|Третья неудачная попытка| DLQ[(exchange payments.dlx → payments.dlq)]
 ```
 
 ### Создание и обработка платежа
@@ -44,24 +53,21 @@ sequenceDiagram
     participant C as Клиент
     participant A as FastAPI
     participant P as PostgreSQL
-    participant O as Outbox publisher
+    participant O as outbox-relay
     participant R as RabbitMQ
     participant W as Consumer
     participant H as Webhook клиента
 
     C->>A: POST /api/v1/payments
-    A->>P: BEGIN
-    A->>P: INSERT payments + outbox
-    P-->>A: COMMIT
+    A->>P: BEGIN: INSERT payments + INSERT outbox, COMMIT
     A-->>C: 202 Accepted, payment_id, pending
     loop Периодический опрос
-        O->>P: SELECT pending events FOR UPDATE SKIP LOCKED
-        O->>R: Publish payments.new
-        R-->>O: Успешная публикация
-        O->>P: Set published_at
+        O->>P: SELECT неопубликованных событий FOR UPDATE SKIP LOCKED
+        O->>R: publish в exchange payments (RK payments.new)
+        O->>P: COMMIT: published_at
     end
-    R->>W: Событие payments.new
-    W->>P: Прочитать платёж
+    R->>W: Событие из очереди payments.new
+    W->>P: Прочитать платёж (FOR UPDATE)
     W->>W: Эмулировать шлюз (2–5 секунд)
     W->>P: Сохранить succeeded или failed
     W->>H: POST webhook с результатом
@@ -74,19 +80,20 @@ sequenceDiagram
 flowchart TD
     Q[payments.new] --> C[Consumer: попытка обработки]
     C -->|Успех и webhook 2xx| ACK[Сообщение подтверждено]
-    C -->|Ошибка, попытка 1| R2[payments.retry.2s<br/>TTL = 2 секунды]
-    R2 -->|После TTL через DLX| Q
-    C -->|Ошибка, попытка 2| R4[payments.retry.4s<br/>TTL = 4 секунды]
-    R4 -->|После TTL через DLX| Q
-    C -->|Ошибка, попытка 3| DLQ[(payments.dlq)]
+    C -->|Ошибка, попытка 1| R2[payments.retry.1<br/>TTL = 2 секунды]
+    R2 -->|После TTL через DLX в exchange payments| Q
+    C -->|Ошибка, попытка 2| R4[payments.retry.2<br/>TTL = 4 секунды]
+    R4 -->|После TTL через DLX в exchange payments| Q
+    C -->|Ошибка, попытка 3| DLQ[(exchange payments.dlx → payments.dlq)]
 ```
 
+Все exchange'и объявлены явно: `payments` (direct, события), `payments.retry` (direct, TTL-очереди с dead-letter в `payments`) и `payments.dlx` (direct, DLQ). Default exchange не используется.
 
 ## Технологии
 
 - Python 3.14
 - FastAPI, Pydantic v2
-- SQLAlchemy async, asyncpg, PostgreSQL
+- SQLAlchemy 2.0 async, asyncpg, PostgreSQL
 - RabbitMQ, FastStream
 - Alembic
 - Docker, Docker Compose
@@ -109,27 +116,37 @@ flowchart TD
    cp .env.example .env
    ```
 
-   В Windows PowerShell используйте `Copy-Item .env.example .env`. Установите собственный `API_KEY` и замените тестовые пароли PostgreSQL и RabbitMQ. Файл `.env` не следует коммитить.
+   В Windows PowerShell используйте `Copy-Item .env.example .env`. Файл `.env` не следует коммитить.
 
-3. Запустите все сервисы:
+3. **Обязательно** сгенерируйте API-ключ и подставьте его в `.env` (шаг нельзя пропустить):
+
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+   Полученную строку укажите в `.env` как `API_KEY=...`. Ключ должен быть не короче 32 символов; значения `change-me` и пустой ключ сервис не принимает. В том же файле замените `POSTGRES_PASSWORD`, `RABBITMQ_DEFAULT_PASS` и соответствующие пароли в `DATABASE_URL`/`RABBITMQ_URL` на собственные.
+
+   После `cp .env.example .env` без замены `API_KEY` сервис `api` намеренно не стартует с ошибкой вида `API_KEY must be changed from the 'change-me' placeholder`. Без `.env` команды `docker compose` падают ещё раньше: `${API_KEY:?...}` требует явной установки ключа.
+
+4. Запустите все сервисы:
 
    ```bash
    docker compose up --build -d
    ```
 
-   API-сервис применяет миграции Alembic перед запуском Uvicorn. Compose ждёт готовности PostgreSQL и RabbitMQ.
+   Сервис `migrations` применяет `alembic upgrade head` и завершается с кодом 0; `api`, `consumer` и `outbox-relay` стартуют после него. Compose ждёт готовности PostgreSQL и RabbitMQ.
 
-4. Проверьте состояние контейнеров и логи:
+5. Проверьте состояние контейнеров и логи:
 
    ```bash
    docker compose ps
-   docker compose logs --tail=100 api
-   docker compose logs --tail=100 consumer
+   curl -s http://localhost:8000/health
+   docker compose logs --tail=100 api consumer outbox-relay
    ```
 
-5. Откройте документацию API: <http://localhost:8000/docs>.
+6. Панель RabbitMQ Management: <http://localhost:25673> (логин и пароль задаются в `.env`). В этом проекте внешний порт AMQP по умолчанию — `25672`; внутри Docker-сети сервисы используют `rabbitmq:5672`.
 
-   Панель RabbitMQ Management: <http://localhost:25673> (логин и пароль задаются в `.env`). В этом проекте внешний порт AMQP по умолчанию — `25672`. Внутри Docker-сети сервисы используют `rabbitmq:5672`.
+Контейнеры `api`, `consumer`, `outbox-relay` и `migrations` запускаются от непривилегированного пользователя `app` (UID 10001), с `cap_drop: [ALL]`, `no-new-privileges` и read-only корневой файловой системой (`/tmp` — tmpfs).
 
 Остановить сервисы, сохранив данные в named volumes:
 
@@ -147,35 +164,34 @@ docker compose down -v
 
 Основные переменные `.env`:
 
-| Переменная | Назначение | Значение для локальной разработки в примере |
+| Переменная | Назначение | Значение в `.env.example` |
 |---|---|---|
-| `API_KEY` | Ключ для REST API | Задайте свой |
-| `POSTGRES_DB` | Имя базы PostgreSQL | `payments` |
-| `POSTGRES_USER` | Пользователь PostgreSQL | `payments` |
-| `POSTGRES_PASSWORD` | Пароль PostgreSQL | Задайте свой |
-| `RABBITMQ_DEFAULT_USER` | Пользователь RabbitMQ | `payments` |
-| `RABBITMQ_DEFAULT_PASS` | Пароль RabbitMQ | Задайте свой |
-| `DATABASE_URL` | SQLAlchemy async URL для локального запуска из Python | `postgresql+asyncpg://payments:payments@localhost:5432/payments` |
-| `RABBITMQ_URL` | AMQP URL для локального запуска из Python | `amqp://payments:payments@localhost:25672/` |
-| `OUTBOX_POLL_INTERVAL_SECONDS` | Интервал опроса Outbox | `1.0` |
+| `API_KEY` | Ключ для REST API (обязателен, минимум 32 символа) | `change-me` (заменить) |
+| `ENABLE_DOCS` | Включает `/docs`, `/redoc`, `/openapi.json` | `false` |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | База PostgreSQL | `payments` / `payments` / `change-me` |
+| `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` | Пользователь RabbitMQ | `payments` / `change-me` |
+| `DATABASE_URL` | SQLAlchemy async URL для запуска из Python | `postgresql+asyncpg://payments:change-me@localhost:5432/payments` |
+| `RABBITMQ_URL` | AMQP URL для запуска из Python | `amqp://payments:change-me@localhost:25672/` |
+| `WEBHOOK_ALLOW_HTTP` | Разрешает `http://` для webhook (local/e2e only) | `false` |
+| `WEBHOOK_ALLOWED_HOSTS` | Доверенные хосты webhook через запятую (обход проверки адресов) | пусто |
+| `OUTBOX_POLL_INTERVAL_SECONDS` | Интервал опроса Outbox relay-процессом | `1.0` |
 | `OUTBOX_BATCH_SIZE` | Максимальное число событий в одном batch | `100` |
 
-В контейнерах используются сетевые имена сервисов `postgres` и `rabbitmq`; в локальной среде — `localhost` и опубликованные порты. Проверьте, что `.env.example` согласован с конфигурацией текущей версии `docker-compose.yml`.
+В контейнерах `DATABASE_URL` и `RABBITMQ_URL` собираются из переменных `POSTGRES_*`/`RABBITMQ_*` и указывают на хосты `postgres` и `rabbitmq`; в локальной среде — `localhost` и опубликованные порты.
 
 ## API
 
-Все бизнес-эндпоинты требуют заголовок `X-API-Key`. Для создания платежа также обязателен `Idempotency-Key`.
+Бизнес-эндпоинты требуют заголовок `X-API-Key`. Для создания платежа также обязателен `Idempotency-Key`. Служебные эндпоинты `/health` и `/health/ready` публичные.
 
 | Метод | Путь | Назначение | Успешный ответ |
 |---|---|---|---|
 | `POST` | `/api/v1/payments` | Создать платёж | `202 Accepted` |
 | `GET` | `/api/v1/payments/{payment_id}` | Получить платёж и его статус | `200 OK` |
-| `GET` | `/docs` | Swagger UI | `200 OK` |
-| `GET` | `/openapi.json` | OpenAPI-спецификация, используется в healthcheck | `200 OK` |
+| `GET` | `/health` | Liveness (без проверки БД) | `200 OK` |
+| `GET` | `/health/ready` | Readiness (проверка БД) | `200 OK`, `503` при недоступной БД |
+| `GET` | `/docs`, `/redoc`, `/openapi.json` | Swagger UI и схема | `200 OK`, только при `ENABLE_DOCS=true` |
 
 ### Создание платежа
-
-Пример для Bash:
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/payments" \
@@ -201,7 +217,15 @@ curl -X POST "http://localhost:8000/api/v1/payments" \
 }
 ```
 
-Идентификатор и время в примере условные. `pending` означает, что запрос принят, а асинхронная обработка ещё не завершена.
+`pending` означает, что запрос принят, а асинхронная обработка ещё не завершена.
+
+Ограничения запроса:
+
+- `description` — не длиннее 500 символов, `Idempotency-Key` — не длиннее 255 и не пустой.
+- `metadata` — не более 16 КБ сериализованного JSON и не более 5 уровней вложенности.
+- `webhook_url` — только `https` (либо `http` при `WEBHOOK_ALLOW_HTTP=true`); IP-литералы, `localhost`/`*.localhost` и URL с `user:pass@` отклоняются с `422`.
+
+Перед отправкой webhook consumer повторно резолвит хост и отклоняет loopback, private, link-local, multicast, reserved и unspecified адреса (включая IPv4-mapped IPv6). Редиректы не выполняются. Запрещённый адрес не повторяется: сообщение сразу уходит в `payments.dlq`, а сохранённый статус платежа не меняется. Для локального стенда хост можно внести в `WEBHOOK_ALLOWED_HOSTS` (только через окружение).
 
 ### Получение информации о платеже
 
@@ -214,73 +238,134 @@ curl "http://localhost:8000/api/v1/payments/a87b9b5c-f8c6-4c3c-a978-63898cfbdbf1
 
 ### Идемпотентность
 
-- Повтор запроса с тем же `Idempotency-Key` и эквивалентными данными возвращает исходный платёж.
+- Повтор запроса с тем же `Idempotency-Key` и эквивалентными данными возвращает исходный платёж (`202`).
 - Использование того же ключа с другими данными возвращает `409 Conflict`.
-- Уникальность ключа обеспечивается ограничением PostgreSQL, а не только предварительным запросом к базе.
+- Уникальность ключа обеспечивается ограничением PostgreSQL, а не только предварительным запросом к базе; гонка одинаковых ключей обрабатывается `IntegrityError` и повторной сверкой хеша.
 - Канонический SHA-256 хеш запроса сохраняется в `request_hash`; порядок ключей JSON-объекта не влияет на вычисленный хеш.
+- Создание платежа и события Outbox выполняются в одном Unit of Work: атомарность гарантирована одной транзакцией.
 
 ### Ошибки API
 
-| Код | Значение |
-|---|---|
-| `401` | API key отсутствует или неверен |
-| `404` | Платёж не найден |
-| `409` | Idempotency key повторно использован с другим запросом |
-| `422` | Некорректное тело запроса или отсутствующий обязательный заголовок |
-| `202` | Платёж принят к асинхронной обработке |
+Единый формат ответа:
 
-## Архитектурные гарантии и ограничения
+```json
+{"error": {"code": "not_found", "message": "Payment not found"}}
+```
+
+| Код | `code` | Значение |
+|---|---|---|
+| `401` | `unauthorized` | API key отсутствует или неверен |
+| `404` | `not_found` | Платёж не найден |
+| `409` | `idempotency_conflict` | Idempotency key повторно использован с другим запросом |
+| `422` | `validation_error` / `domain_error` | Некорректное тело запроса, заголовок или доменное правило |
+| `503` | `not_ready` | `/health/ready`: база недоступна |
+
+## Архитектурные решения
+
+### Доменный слой отдельно от ORM
+
+`Payment` — dataclass с бизнес-правилами: допустимые переходы `pending → succeeded|failed`, сравнение запроса с сохранённым хешем (`ensure_same_request`). ORM-модели в `infrastructure/db/orm.py` — только маппинг таблиц, поэтому бизнес-логика не зависит от схемы БД и тестируется без неё.
+
+### Репозитории и Unit of Work
+
+Роутеры и use case'ы не работают с `AsyncSession`. Репозитории инкапсулируют SQL, Unit of Work — границы транзакции и `commit`/`rollback`. Это позволяет подменять хранилище в unit-тестах fake-реализациями и держит транзакционные границы в одном месте.
 
 ### Transactional Outbox
 
-Запись платежа и запись события в `outbox` выполняются в одной транзакции PostgreSQL. Поэтому нельзя зафиксировать новый платёж, не сохранив одновременно событие для публикации. Publisher выбирает неопубликованные события и устанавливает `published_at` только после успешной публикации.
+Запись платежа и запись события в `outbox` выполняются в одной транзакции PostgreSQL. Поэтому нельзя зафиксировать новый платёж, не сохранив одновременно событие для публикации. `outbox-relay` — отдельный процесс: он выбирает неопубликованные события (`FOR UPDATE SKIP LOCKED`), публикует их с publisher confirm и только затем в том же UoW ставит `published_at`.
 
 ### Семантика доставки
 
-Доставка событий — **at-least-once**, а не exactly-once. Если процесс завершится после публикации в RabbitMQ, но до фиксации `published_at`, событие может быть опубликовано повторно. Consumer должен оставаться идемпотентным.
+Доставка событий — **at-least-once**, а не exactly-once. Если relay упадёт после публикации в RabbitMQ, но до фиксации `published_at`, событие будет опубликовано повторно. Consumer идемпотентен: для платежа в финальном статусе шлюз не вызывается, повторяется только отправка webhook. Получатель webhook должен дедуплицировать уведомления по `event_id`.
 
 ### Повторные попытки
 
-Consumer выполняет до трёх попыток: первоначальную, повтор через 2 секунды и повтор через 4 секунды. Retry-очереди используют TTL и dead-letter routing. После третьей неудачи сообщение отправляется в `payments.dlq`.
+Consumer выполняет до трёх попыток: первоначальную, повтор через 2 секунды (`payments.retry.1`) и повтор через 4 секунды (`payments.retry.2`). Retry-очереди используют TTL и dead-letter routing обратно в exchange `payments`; номер попытки передаётся в заголовке `x-attempt`. После третьей неудачи сообщение публикуется в `payments.dlx` → `payments.dlq`.
 
 ### Платёж и webhook — разные этапы
 
-Результат эмулируемого процессинга сохраняется в PostgreSQL до отправки webhook. При повторной доставке события с уже конечным статусом (`succeeded` / `failed`) шлюз не запускается повторно: consumer повторяет доставку webhook. Получатель webhook должен дедуплицировать события по `event_id`, потому что HTTP-ответ может потеряться после фактической обработки уведомления получателем.
+Результат процессинга сохраняется в PostgreSQL до отправки webhook. Если webhook завершился ошибкой, сообщение уходит в retry, но платёж повторно не процессируется.
 
-### Что не является production-ready
+### Безопасность и ограничения
 
-- Статический API key — упрощённая аутентификация для примера.
-- Необходимо ограничивать и валидировать адреса webhook (включая защиту от SSRF), применять HTTPS и при необходимости подписывать запросы.
+#### Реализовано
+
+- Обязательный API-ключ без значения по умолчанию: плейсхолдер `change-me`, пустой ключ и ключи короче 32 символов не проходят валидацию, сервис не стартует.
+- SSRF-защита webhook: https-only (с явным флагом для http), запрет IP-литералов, localhost и userinfo на входе; проверка всех DNS-адресов перед каждой отправкой, учёт IPv4-mapped IPv6, `follow_redirects=False`.
+- Непривилегированные контейнеры: UID 10001, `cap_drop: [ALL]`, `no-new-privileges`, read-only rootfs.
+- Лимиты входных данных: 16 КБ и 5 уровней вложенности для `metadata`, ограниченные `description` и `Idempotency-Key`.
+
+#### Не production-ready
+
+- Статический API key — упрощённая аутентификация для примера; нет подписи webhook (HMAC), rate limiting и защиты от перебора ключа.
 - Эмулируемый шлюз не моделирует идемпотентность настоящего внешнего платёжного провайдера.
 - DLQ требует наблюдаемости, оповещений и документированной процедуры повторной обработки.
 - Секреты, пароли и API key для реального окружения нужно хранить в менеджере секретов, а не в образе или репозитории.
+- Один инстанс consumer'а не масштабируется по платежам «из коробки»; порядок и конкурентность обеспечиваются блокировкой строки и идемпотентностью обработки.
 
 ## Тестирование
 
-Для локального запуска тестов требуются Python из `pyproject.toml`, `uv` и PostgreSQL. Создайте отдельную базу тестирования; тестовая конфигурация должна указывать на имя базы, оканчивающееся на `_test` (например, `payments_test`). Обычные тесты используют отдельную тестовую БД и не должны запускаться против `payments`.
+Требуются Python из `pyproject.toml`, `uv` и PostgreSQL для интеграционных тестов. Создайте отдельную базу; `TEST_DATABASE_URL` должен указывать на имя, оканчивающееся на `_test` (по умолчанию `postgresql+asyncpg://payments:change-me@localhost:5432/payments_test`; пароль должен совпадать с `POSTGRES_PASSWORD` из `.env`).
 
 ```bash
 uv sync
-uv run ruff check src tests
-uv run pytest -v
+uv run ruff check src tests alembic
+
+# unit + архитектурные тесты, без БД и брокера
+uv run pytest -m "not e2e" -q
+
+# только unit
+uv run pytest tests/unit -q
+
+# интеграционные API/репозитории против TEST_DATABASE_URL
+uv run pytest -m integration -q
+
+# retry → DLQ против живого RabbitMQ (нужен поднятый rabbitmq)
+RABBITMQ_URL=amqp://payments:change-me@127.0.0.1:25672/ uv run pytest -m rabbit -q
+
+# e2e-сценарий против поднятого compose (POST → succeeded|failed → webhook)
+# Приёмник webhook живёт в сети compose, поэтому до запуска стека разрешите
+# http для api/consumer и хост приёмника (имя контейнера) для consumer:
+#   WEBHOOK_ALLOW_HTTP=true
+#   WEBHOOK_ALLOWED_HOSTS=e2e-webhook-receiver
+# в .env, затем `docker compose up -d --build`.
+E2E_API_KEY=$API_KEY uv run pytest -m e2e -q
 ```
 
-Текущий набор включает валидацию Pydantic-схем, вычисление idempotency hash, API-тесты (статусы HTTP, авторизация, идемпотентность, создание Outbox), тесты publisher и обработчика платежа.
+Unit- и интеграционным тестам `.env` не нужен: `tests/conftest.py` подставляет тестовый `API_KEY`, если переменная не задана. Для e2e-теста нужен ключ запущенного стека (`E2E_API_KEY`). Без доступной БД, брокера или запущенного стека соответствующие тесты пропускаются, а не падают. E2E-тест поднимает контейнер-приёмник webhook в сети compose и проверяет, что платёж дошёл до финального статуса и уведомление получено.
+
+## Миграции
+
+`alembic/` закоммичен в репозиторий (не в `.gitignore`). Применение миграций:
+
+```bash
+alembic upgrade head
+```
+
+В Docker Compose это делает одноразовый сервис `migrations`; `api`, `consumer` и `outbox-relay` ждут его успешного завершения.
 
 ## Структура проекта
 
 ```text
 src/payment_service/
-├── api/             # FastAPI endpoints и API key dependency
-├── messaging/       # Объявление RabbitMQ queues
-├── models/          # SQLAlchemy models: Payment и Outbox
-├── schemas/         # Pydantic request/response/event schemas
-├── services/        # Хеширование idempotency key и процессинг
-├── workers/         # Outbox publisher и RabbitMQ consumer
-├── config.py        # Конфигурация из окружения
-└── db.py            # Async SQLAlchemy engine и session factory
-alembic/             # Миграции PostgreSQL
-tests/              # Unit и интеграционные тесты
+├── domain/                  # Payment, события, ошибки, порты (Protocol)
+├── application/             # use case'ы: create/get/process/relay, hash идемпотентности
+├── infrastructure/
+│   ├── db/                  # ORM-модели, мапперы, репозитории, Unit of Work, session
+│   ├── messaging/           # топология exchange/queue, публикатор FastStream
+│   ├── gateway.py           # эмулятор платёжного шлюза
+│   └── webhook.py           # отправка webhook через httpx
+├── entrypoints/
+│   ├── api/                 # FastAPI app, роутеры, DTO, зависимости, health, ошибки
+│   ├── consumer.py          # FastStream consumer + retry/DLQ
+│   └── outbox_relay.py      # отдельный процесс публикации Outbox
+├── config.py                # конфигурация из окружения (pydantic-settings)
+└── container.py             # сборка зависимостей
+alembic/                     # env.py и versions/0001_initial.py
+tests/
+├── unit/                    # domain, application, схемы, архитектурные инварианты
+├── integration/             # PostgreSQL: API, репозитории/UoW, retry→DLQ
+└── e2e/                     # smoke против docker compose
 Dockerfile
 docker-compose.yml
 pyproject.toml

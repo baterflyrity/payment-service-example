@@ -33,6 +33,11 @@ packages = ["src/payment_service"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+	"integration: test that requires a running PostgreSQL",
+	"rabbit: integration test that requires a running RabbitMQ",
+	"e2e: end-to-end smoke test against a running docker compose stack",
+]
 
 [tool.ruff]
 line-length = 999
