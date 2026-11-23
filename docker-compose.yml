@@ -1,10 +1,19 @@
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-payments}
       POSTGRES_USER: ${POSTGRES_USER:-payments}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-payments}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -23,7 +32,7 @@ services:
     image: rabbitmq:4-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-payments}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-payments}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}
     ports:
       - "127.0.0.1:25672:5672"
       - "127.0.0.1:25673:15672"
@@ -49,11 +58,13 @@ services:
       - upgrade
       - head
     environment:
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-payments}"
+      API_KEY: ${API_KEY:?Set API_KEY in .env}
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
+    <<: *hardened
 
   api:
     build:
@@ -66,8 +77,8 @@ services:
       - --port
       - "8000"
     environment:
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
-      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:-payments}@rabbitmq:5672/"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-payments}"
+      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}@rabbitmq:5672/"
       API_KEY: ${API_KEY:?Set API_KEY in .env}
     ports:
       - "127.0.0.1:8000:8000"
@@ -89,6 +100,7 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+    <<: *hardened
 
   outbox-relay:
     build:
@@ -98,10 +110,11 @@ services:
       - -m
       - payment_service.entrypoints.outbox_relay
     environment:
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
-      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:-payments}@rabbitmq:5672/"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-payments}"
+      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}@rabbitmq:5672/"
       OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1.0}
       OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+      API_KEY: ${API_KEY:?Set API_KEY in .env}
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -110,6 +123,7 @@ services:
       rabbitmq:
         condition: service_healthy
     restart: unless-stopped
+    <<: *hardened
 
   consumer:
     build:
@@ -119,8 +133,11 @@ services:
       - run
       - payment_service.entrypoints.consumer:app
     environment:
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
-      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:-payments}@rabbitmq:5672/"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-payments}"
+      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}@rabbitmq:5672/"
+      WEBHOOK_ALLOW_HTTP: ${WEBHOOK_ALLOW_HTTP:-false}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+      API_KEY: ${API_KEY:?Set API_KEY in .env}
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -129,6 +146,7 @@ services:
       rabbitmq:
         condition: service_healthy
     restart: unless-stopped
+    <<: *hardened
 
 volumes:
   postgres_data:

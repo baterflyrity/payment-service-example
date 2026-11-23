@@ -116,9 +116,19 @@ flowchart TD
    cp .env.example .env
    ```
 
-   В Windows PowerShell используйте `Copy-Item .env.example .env`. Установите собственный `API_KEY` и замените тестовые пароли PostgreSQL и RabbitMQ. Файл `.env` не следует коммитить. Без `.env` команды `docker compose` не стартуют: `API_KEY` обязателен для сервиса `api`.
+   В Windows PowerShell используйте `Copy-Item .env.example .env`. Файл `.env` не следует коммитить.
 
-3. Запустите все сервисы:
+3. **Обязательно** сгенерируйте API-ключ и подставьте его в `.env` (шаг нельзя пропустить):
+
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+   Полученную строку укажите в `.env` как `API_KEY=...`. Ключ должен быть не короче 32 символов; значения `change-me` и пустой ключ сервис не принимает. В том же файле замените `POSTGRES_PASSWORD`, `RABBITMQ_DEFAULT_PASS` и соответствующие пароли в `DATABASE_URL`/`RABBITMQ_URL` на собственные.
+
+   После `cp .env.example .env` без замены `API_KEY` сервис `api` намеренно не стартует с ошибкой вида `API_KEY must be changed from the 'change-me' placeholder`. Без `.env` команды `docker compose` падают ещё раньше: `${API_KEY:?...}` требует явной установки ключа.
+
+4. Запустите все сервисы:
 
    ```bash
    docker compose up --build -d
@@ -126,7 +136,7 @@ flowchart TD
 
    Сервис `migrations` применяет `alembic upgrade head` и завершается с кодом 0; `api`, `consumer` и `outbox-relay` стартуют после него. Compose ждёт готовности PostgreSQL и RabbitMQ.
 
-4. Проверьте состояние контейнеров и логи:
+5. Проверьте состояние контейнеров и логи:
 
    ```bash
    docker compose ps
@@ -134,7 +144,9 @@ flowchart TD
    docker compose logs --tail=100 api consumer outbox-relay
    ```
 
-5. Панель RabbitMQ Management: <http://localhost:25673> (логин и пароль задаются в `.env`). В этом проекте внешний порт AMQP по умолчанию — `25672`; внутри Docker-сети сервисы используют `rabbitmq:5672`.
+6. Панель RabbitMQ Management: <http://localhost:25673> (логин и пароль задаются в `.env`). В этом проекте внешний порт AMQP по умолчанию — `25672`; внутри Docker-сети сервисы используют `rabbitmq:5672`.
+
+Контейнеры `api`, `consumer`, `outbox-relay` и `migrations` запускаются от непривилегированного пользователя `app` (UID 10001), с `cap_drop: [ALL]`, `no-new-privileges` и read-only корневой файловой системой (`/tmp` — tmpfs).
 
 Остановить сервисы, сохранив данные в named volumes:
 
@@ -154,12 +166,14 @@ docker compose down -v
 
 | Переменная | Назначение | Значение в `.env.example` |
 |---|---|---|
-| `API_KEY` | Ключ для REST API (обязателен для `api`) | Тестовый ключ |
+| `API_KEY` | Ключ для REST API (обязателен, минимум 32 символа) | `change-me` (заменить) |
 | `ENABLE_DOCS` | Включает `/docs`, `/redoc`, `/openapi.json` | `false` |
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | База PostgreSQL | `payments` / `payments` / `payments` |
-| `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` | Пользователь RabbitMQ | `payments` / `payments` |
-| `DATABASE_URL` | SQLAlchemy async URL для запуска из Python | `postgresql+asyncpg://payments:payments@localhost:5432/payments` |
-| `RABBITMQ_URL` | AMQP URL для запуска из Python | `amqp://payments:payments@localhost:25672/` |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | База PostgreSQL | `payments` / `payments` / `change-me` |
+| `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` | Пользователь RabbitMQ | `payments` / `change-me` |
+| `DATABASE_URL` | SQLAlchemy async URL для запуска из Python | `postgresql+asyncpg://payments:change-me@localhost:5432/payments` |
+| `RABBITMQ_URL` | AMQP URL для запуска из Python | `amqp://payments:change-me@localhost:25672/` |
+| `WEBHOOK_ALLOW_HTTP` | Разрешает `http://` для webhook (local/e2e only) | `false` |
+| `WEBHOOK_ALLOWED_HOSTS` | Доверенные хосты webhook через запятую (обход проверки адресов) | пусто |
 | `OUTBOX_POLL_INTERVAL_SECONDS` | Интервал опроса Outbox relay-процессом | `1.0` |
 | `OUTBOX_BATCH_SIZE` | Максимальное число событий в одном batch | `100` |
 
@@ -204,6 +218,14 @@ curl -X POST "http://localhost:8000/api/v1/payments" \
 ```
 
 `pending` означает, что запрос принят, а асинхронная обработка ещё не завершена.
+
+Ограничения запроса:
+
+- `description` — не длиннее 500 символов, `Idempotency-Key` — не длиннее 255 и не пустой.
+- `metadata` — не более 16 КБ сериализованного JSON и не более 5 уровней вложенности.
+- `webhook_url` — только `https` (либо `http` при `WEBHOOK_ALLOW_HTTP=true`); IP-литералы, `localhost`/`*.localhost` и URL с `user:pass@` отклоняются с `422`.
+
+Перед отправкой webhook consumer повторно резолвит хост и отклоняет loopback, private, link-local, multicast, reserved и unspecified адреса (включая IPv4-mapped IPv6). Редиректы не выполняются. Запрещённый адрес не повторяется: сообщение сразу уходит в `payments.dlq`, а сохранённый статус платежа не меняется. Для локального стенда хост можно внести в `WEBHOOK_ALLOWED_HOSTS` (только через окружение).
 
 ### Получение информации о платеже
 
@@ -266,8 +288,16 @@ Consumer выполняет до трёх попыток: первоначаль
 
 ### Что не является production-ready
 
-- Статический API key — упрощённая аутентификация для примера.
-- Необходимо ограничивать и валидировать адреса webhook (включая защиту от SSRF), применять HTTPS и при необходимости подписывать запросы.
+Реализованные меры безопасности:
+
+- Обязательный API-ключ без значения по умолчанию: плейсхолдер `change-me`, пустой ключ и ключи короче 32 символов не проходят валидацию, сервис не стартует.
+- SSRF-защита webhook: https-only (с явным флагом для http), запрет IP-литералов, localhost и userinfo на входе; проверка всех DNS-адресов перед каждой отправкой, учёт IPv4-mapped IPv6, `follow_redirects=False`.
+- Непривилегированные контейнеры: UID 10001, `cap_drop: [ALL]`, `no-new-privileges`, read-only rootfs.
+- Лимиты входных данных: 16 КБ и 5 уровней вложенности для `metadata`, ограниченные `description` и `Idempotency-Key`.
+
+Известные ограничения (не production-ready):
+
+- Статический API key — упрощённая аутентификация для примера; нет подписи webhook (HMAC), rate limiting и защиты от перебора ключа.
 - Эмулируемый шлюз не моделирует идемпотентность настоящего внешнего платёжного провайдера.
 - DLQ требует наблюдаемости, оповещений и документированной процедуры повторной обработки.
 - Секреты, пароли и API key для реального окружения нужно хранить в менеджере секретов, а не в образе или репозитории.
@@ -275,7 +305,7 @@ Consumer выполняет до трёх попыток: первоначаль
 
 ## Тестирование
 
-Требуются Python из `pyproject.toml`, `uv` и PostgreSQL для интеграционных тестов. Создайте отдельную базу; `TEST_DATABASE_URL` должен указывать на имя, оканчивающееся на `_test` (по умолчанию `postgresql+asyncpg://payments:payments@localhost:5432/payments_test`).
+Требуются Python из `pyproject.toml`, `uv` и PostgreSQL для интеграционных тестов. Создайте отдельную базу; `TEST_DATABASE_URL` должен указывать на имя, оканчивающееся на `_test` (по умолчанию `postgresql+asyncpg://payments:change-me@localhost:5432/payments_test`; пароль должен совпадать с `POSTGRES_PASSWORD` из `.env`).
 
 ```bash
 uv sync
@@ -291,14 +321,18 @@ uv run pytest tests/unit -q
 uv run pytest -m integration -q
 
 # retry → DLQ против живого RabbitMQ (нужен поднятый rabbitmq)
-RABBITMQ_URL=amqp://payments:payments@127.0.0.1:25672/ uv run pytest -m rabbit -q
+RABBITMQ_URL=amqp://payments:change-me@127.0.0.1:25672/ uv run pytest -m rabbit -q
 
 # e2e-сценарий против поднятого compose (POST → succeeded|failed → webhook)
-docker compose up -d --build
+# Приёмник webhook живёт в сети compose, поэтому до запуска стека разрешите
+# его хост (имя контейнера) и http в consumer:
+#   WEBHOOK_ALLOW_HTTP=true
+#   WEBHOOK_ALLOWED_HOSTS=e2e-webhook-receiver
+# в .env, затем `docker compose up -d --build`.
 E2E_API_KEY=$API_KEY uv run pytest -m e2e -q
 ```
 
-Без доступной БД, брокера или запущенного стека соответствующие тесты пропускаются, а не падают. E2E-тест поднимает контейнер-приёмник webhook в сети compose и проверяет, что платёж дошёл до финального статуса и уведомление получено.
+Для запуска тестов из Python нужен валидный `API_KEY`: создайте `.env` по инструкции выше (или экспортируйте переменную окружения) — без него конфигурация не загрузится так же, как и у сервиса. Без доступной БД, брокера или запущенного стека соответствующие тесты пропускаются, а не падают. E2E-тест поднимает контейнер-приёмник webhook в сети compose и проверяет, что платёж дошёл до финального статуса и уведомление получено.
 
 ## Миграции
 

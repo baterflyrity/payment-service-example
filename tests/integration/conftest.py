@@ -18,7 +18,7 @@ from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://payments:payments@localhost:5432/payments_test",
+    "postgresql+asyncpg://payments:change-me@localhost:5432/payments_test",
 )
 
 # A safety check against accidentally running tests against the development DB.

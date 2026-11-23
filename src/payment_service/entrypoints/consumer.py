@@ -28,7 +28,10 @@ from payment_service.infrastructure.messaging.topology import (
     RETRY_QUEUES,
     declare_topology,
 )
-from payment_service.infrastructure.webhook import HttpxWebhookSender
+from payment_service.infrastructure.webhook import (
+    HttpxWebhookSender,
+    WebhookDestinationForbidden,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,43 @@ def current_attempt(headers: dict[str, Any] | None) -> int:
         return MAX_PROCESSING_ATTEMPTS
 
     return min(max(attempt, 1), MAX_PROCESSING_ATTEMPTS)
+
+
+async def publish_to_dead_letter(
+    payload: dict[str, Any],
+    *,
+    error: Exception,
+    rabbit_broker: RabbitBroker,
+    message_id: str | None,
+) -> None:
+    """Публикует сообщение в DLQ без retry.
+
+    Используется для неисправимых ошибок (например, запрещённый адрес
+    webhook), а также после исчерпания попыток.
+    """
+
+    error_text = f"{type(error).__name__}: {error}"[:MAX_ERROR_LENGTH]
+    stable_message_id = str(
+        payload.get("event_id") or message_id or "unknown-event"
+    )
+
+    logger.error(
+        "Event %s failed; sending to DLQ: %s",
+        stable_message_id,
+        error_text,
+    )
+
+    await rabbit_broker.publish(
+        payload,
+        exchange=PAYMENTS_DLX_EXCHANGE,
+        routing_key=PAYMENTS_DLQ_ROUTING_KEY,
+        headers={
+            ATTEMPT_HEADER: MAX_PROCESSING_ATTEMPTS,
+            LAST_ERROR_HEADER: error_text,
+        },
+        message_id=stable_message_id,
+        persist=True,
+    )
 
 
 async def schedule_retry_or_dead_letter(
@@ -128,16 +168,11 @@ async def schedule_retry_or_dead_letter(
         error_text,
     )
 
-    await rabbit_broker.publish(
+    await publish_to_dead_letter(
         payload,
-        exchange=PAYMENTS_DLX_EXCHANGE,
-        routing_key=PAYMENTS_DLQ_ROUTING_KEY,
-        headers={
-            ATTEMPT_HEADER: MAX_PROCESSING_ATTEMPTS,
-            LAST_ERROR_HEADER: error_text,
-        },
-        message_id=stable_message_id,
-        persist=True,
+        error=error,
+        rabbit_broker=rabbit_broker,
+        message_id=message_id,
     )
 
 
@@ -166,6 +201,23 @@ async def process_delivery(
 
     except asyncio.CancelledError:
         raise
+
+    except WebhookDestinationForbidden as exc:
+        # Запрещённый адрес не станет доступен при повторе: сразу в DLQ.
+        # Статус платежа уже сохранён сервисом и не меняется.
+        logger.error(
+            "Webhook destination forbidden for event %s; sending to DLQ "
+            "without retry: %s",
+            payload.get("event_id"),
+            exc,
+        )
+
+        await publish_to_dead_letter(
+            payload,
+            error=exc,
+            rabbit_broker=rabbit_broker,
+            message_id=message.message_id,
+        )
 
     except Exception as exc:
         logger.exception(
@@ -227,6 +279,7 @@ async def startup() -> None:
         webhook_sender=HttpxWebhookSender(
             _http_client,
             timeout_seconds=WEBHOOK_TIMEOUT_SECONDS,
+            allowed_hosts=settings.webhook_allowed_host_names,
         ),
         clock=utcnow,
     )

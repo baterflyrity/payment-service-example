@@ -275,6 +275,59 @@ async def test_invalid_payload_returns_422(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"payload": "x" * (16 * 1024 + 1)},
+        {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}},
+    ],
+    ids=["too-large", "too-deep"],
+)
+async def test_oversized_or_too_deep_metadata_returns_422(
+    client: AsyncClient,
+    api_key: str,
+    metadata: dict[str, object],
+) -> None:
+    response = await create_payment(
+        client,
+        api_key,
+        "invalid-metadata",
+        metadata=metadata,
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "webhook_url",
+    [
+        "http://rabbitmq:15672/",
+        "https://169.254.169.254/latest/meta-data",
+        "https://localhost/webhook",
+        "https://user:pass@example.com/webhook",
+    ],
+)
+async def test_unsafe_webhook_url_returns_422(
+    client: AsyncClient,
+    api_key: str,
+    webhook_url: str,
+) -> None:
+    response = await create_payment(
+        client,
+        api_key,
+        "invalid-webhook-url",
+        webhook_url=webhook_url,
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
 async def test_idempotency_key_is_required(
     client: AsyncClient,
     api_key: str,

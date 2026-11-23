@@ -28,8 +28,15 @@ import pytest
 pytestmark = pytest.mark.e2e
 
 API_URL = os.getenv("E2E_API_URL", "http://127.0.0.1:8000").rstrip("/")
-API_KEY = os.getenv("E2E_API_KEY") or os.getenv("API_KEY") or "e2e-api-key"
+API_KEY = (
+    os.getenv("E2E_API_KEY")
+    or os.getenv("API_KEY")
+    or "e2e-api-key-0123456789abcdef0123456789abcdef"
+)
 COMPOSE_SERVICE = "consumer"
+# Имя контейнера-приёмника фиксировано: consumer принимает его только если
+# оно перечислено в WEBHOOK_ALLOWED_HOSTS (см. README).
+WEBHOOK_HOST = os.getenv("E2E_WEBHOOK_HOST", "e2e-webhook-receiver")
 
 PAYMENT_PROCESSING_TIMEOUT_SECONDS = 45.0
 WEBHOOK_TIMEOUT_SECONDS = 30.0
@@ -105,6 +112,31 @@ def container_network(container_id: str) -> str:
     return networks.splitlines()[0] if networks else ""
 
 
+def consumer_allows_webhook_destination(container_id: str) -> bool:
+    """Проверяет, что consumer настроен принимать приёмник e2e через env."""
+
+    raw = docker(
+        "inspect",
+        "-f",
+        "{{json .Config.Env}}",
+        container_id,
+    ).stdout.strip()
+    environment = dict(
+        item.split("=", 1) for item in json.loads(raw) if "=" in item
+    )
+
+    allowed = {
+        host.strip().lower().rstrip(".")
+        for host in environment.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    }
+
+    return (
+        environment.get("WEBHOOK_ALLOW_HTTP", "false").lower() == "true"
+        and WEBHOOK_HOST.lower() in allowed
+    )
+
+
 def wait_for_receiver(container_name: str, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
 
@@ -138,14 +170,23 @@ def webhook_receiver() -> Iterator[tuple[str, Path]]:
             f"docker compose service '{COMPOSE_SERVICE}' is not running",
         )
 
+    if not consumer_allows_webhook_destination(consumer_id):
+        pytest.skip(
+            "consumer does not allow the e2e webhook receiver; set "
+            "WEBHOOK_ALLOW_HTTP=true and "
+            f"WEBHOOK_ALLOWED_HOSTS={WEBHOOK_HOST} in .env and restart "
+            "the compose stack (see README)",
+        )
+
     image = container_image(consumer_id)
     network = container_network(consumer_id)
-    container_name = f"e2e-webhook-{uuid.uuid4().hex[:8]}"
+    container_name = WEBHOOK_HOST
 
     with tempfile.TemporaryDirectory() as directory:
         output_dir = Path(directory)
         webhook_file = output_dir / "webhook.json"
 
+        docker("rm", "-f", container_name, check=False)
         docker(
             "run",
             "-d",

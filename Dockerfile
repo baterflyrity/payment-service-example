@@ -2,20 +2,28 @@ FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    HOME=/home/app
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir uv
+# Версия uv зафиксирована, чтобы сборка была воспроизводимой.
+RUN pip install --no-cache-dir uv==0.13.9
 
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
 
-RUN uv sync --frozen --no-dev
+# Непривилегированный пользователь с фиксированным UID: контейнер не работает
+# от root. Права на нужные пути отдаются до переключения USER.
+RUN uv sync --frozen --no-dev \
+    && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin app \
+    && chown -R app:app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
+
+USER app
 
 EXPOSE 8000
 

@@ -14,6 +14,7 @@ from payment_service.infrastructure.messaging.topology import (
     PAYMENTS_RETRY_4S_QUEUE,
     PAYMENTS_RETRY_EXCHANGE,
 )
+from payment_service.infrastructure.webhook import WebhookDestinationForbidden
 
 
 class FakeMessage:
@@ -140,6 +141,33 @@ async def test_third_failure_goes_to_dlq() -> None:
     assert call["routing_key"] == PAYMENTS_DLQ.name
     assert call["headers"]["x-attempt"] == MAX_PROCESSING_ATTEMPTS
     assert "webhook is down" in call["headers"]["x-last-error"]
+
+
+@pytest.mark.asyncio
+async def test_forbidden_webhook_destination_goes_to_dlq_without_retry() -> None:
+    broker = FakeBroker()
+    # Первая попытка: при обычной ошибке сообщение ушло бы в retry.
+    message = FakeMessage()
+    payload = make_payload()
+
+    await process_delivery(
+        payload,
+        message,
+        service=FailingService(
+            WebhookDestinationForbidden("resolves to forbidden address 127.0.0.1"),
+        ),
+        rabbit_broker=broker,  # type: ignore[arg-type]
+    )
+
+    assert message.acked == 1
+    assert len(broker.published) == 1
+
+    call = broker.published[0]
+    assert call["exchange"] == PAYMENTS_DLX_EXCHANGE
+    assert call["routing_key"] == PAYMENTS_DLQ_ROUTING_KEY
+    assert call["headers"]["x-attempt"] == MAX_PROCESSING_ATTEMPTS
+    assert "WebhookDestinationForbidden" in call["headers"]["x-last-error"]
+    assert "forbidden address" in call["headers"]["x-last-error"]
 
 
 @pytest.mark.asyncio
