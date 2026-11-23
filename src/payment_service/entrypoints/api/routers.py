@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from payment_service.application.commands import CreatePaymentCommand
 from payment_service.application.create_payment import CreatePaymentService
@@ -11,7 +11,10 @@ from payment_service.container import (
     get_payment_service,
 )
 from payment_service.domain.payment import Currency
-from payment_service.entrypoints.api.deps import require_api_key
+from payment_service.entrypoints.api.deps import (
+    require_api_key,
+    require_idempotency_key,
+)
 from payment_service.entrypoints.api.schemas import (
     PaymentCreate,
     PaymentCreated,
@@ -32,20 +35,10 @@ router = APIRouter(
 )
 async def create_payment(
     payload: PaymentCreate,
-    idempotency_key: Annotated[
-        str,
-        Header(alias="Idempotency-Key", min_length=1, max_length=255),
-    ],
+    idempotency_key: Annotated[str, Depends(require_idempotency_key)],
     service: Annotated[CreatePaymentService, Depends(get_create_payment_service)],
 ) -> PaymentCreated:
     """Create a payment; idempotency and outbox live in the application layer."""
-
-    normalized_key = idempotency_key.strip()
-    if not normalized_key:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Idempotency-Key must not be empty",
-        )
 
     command = CreatePaymentCommand(
         amount=payload.amount,
@@ -53,7 +46,7 @@ async def create_payment(
         description=payload.description,
         metadata=payload.metadata,
         webhook_url=str(payload.webhook_url),
-        idempotency_key=normalized_key,
+        idempotency_key=idempotency_key,
     )
 
     payment, _ = await service.execute(command)

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from payment_service.api.main import app
 from payment_service.container import get_unit_of_work_factory
+from payment_service.entrypoints.api.app import app
 from payment_service.infrastructure.db.orm import Base
 from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
 

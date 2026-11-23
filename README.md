@@ -279,7 +279,7 @@ Consumer выполняет до трёх попыток: первоначаль
 
 ```bash
 uv sync
-uv run ruff check src tests
+uv run ruff check src tests alembic
 
 # unit + архитектурные тесты, без БД и брокера
 uv run pytest -m "not e2e" -q
@@ -325,7 +325,6 @@ src/payment_service/
 │   ├── api/                 # FastAPI app, роутеры, DTO, зависимости, health, ошибки
 │   ├── consumer.py          # FastStream consumer + retry/DLQ
 │   └── outbox_relay.py      # отдельный процесс публикации Outbox
-├── api/main.py              # совместимый шим: payment_service.api.main:app
 ├── config.py                # конфигурация из окружения (pydantic-settings)
 └── container.py             # сборка зависимостей
 alembic/                     # env.py и versions/0001_initial.py

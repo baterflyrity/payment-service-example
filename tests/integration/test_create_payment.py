@@ -13,11 +13,11 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from payment_service.api.main import app
 from payment_service.application.commands import CreatePaymentCommand
 from payment_service.application.create_payment import CreatePaymentService
 from payment_service.container import get_unit_of_work_factory
 from payment_service.domain.payment import Currency
+from payment_service.entrypoints.api.app import app
 from payment_service.infrastructure.db.orm import OutboxORM, PaymentORM
 from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
 

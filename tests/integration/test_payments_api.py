@@ -5,8 +5,8 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from payment_service.api.main import app as fastapi_app
 from payment_service.entrypoints.api import health as health_module
+from payment_service.entrypoints.api.app import app as fastapi_app
 from payment_service.infrastructure.db.orm import OutboxORM as Outbox
 from payment_service.infrastructure.db.orm import PaymentORM as Payment
 
@@ -287,6 +287,28 @@ async def test_idempotency_key_is_required(
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("idempotency_key", ["", "   "])
+async def test_empty_idempotency_key_returns_422(
+    client: AsyncClient,
+    api_key: str,
+    idempotency_key: str,
+) -> None:
+    response = await client.post(
+        PAYMENTS_URL,
+        headers={
+            "X-API-Key": api_key,
+            "Idempotency-Key": idempotency_key,
+        },
+        json=make_payload(),
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+    assert body["error"]["message"]
 
 
 @pytest.mark.asyncio

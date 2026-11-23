@@ -70,3 +70,10 @@
 - `.env.example` очищен от `[TEMPLATE]`, добавлен `ENABLE_DOCS=false`.
 - `consumer` больше не зависит от healthy `api` и не получает неиспользуемые `API_KEY`/`OUTBOX_*`.
 - README описывает актуальные слои, `outbox-relay`, три exchange'а, health/readiness, формат ошибок, `ENABLE_DOCS` и команды всех уровней тестов.
+
+## T10
+- `Idempotency-Key` из одних пробелов HTTP-парсер нормализует в пустую строку, поэтому FastAPI сообщает `header.Idempotency-Key: Field required` (всё ещё `422` + `validation_error`). Если нужен текст «must not be empty», понадобится собственный `Header`-валидатор, а не зависимость.
+- `ruff format --check` расходится с существующим кодом (pre-existing): проект проверяет только `ruff check`, форматирование в DoD не входит. Если вводить формат-проверку — отдельная задача с прогоном по всему репозиторию.
+- Интеграционные тесты создают схему через `Base.metadata.create_all`, а не через Alembic. Миграции проверены отдельно (`alembic downgrade base && alembic upgrade head` на `payments_test`), но автотеста на соответствие ORM и миграций нет — кандидат на отдельную задачу.
+- Ручной curl из README с `webhook_url=https://merchant.example/...` даёт ожидаемые `httpx.ConnectError` и retry→DLQ (хост не резолвится). Статус платежа при этом фиксируется до webhook. Для проверки успешной доставки webhook использовать e2e-тест, а не ручной curl.
+- Основной compose-проект после интеграционных проверок остановлен (`docker compose stop`), тома сохранены; в чистом клоне выполнен `docker compose down -v`.
