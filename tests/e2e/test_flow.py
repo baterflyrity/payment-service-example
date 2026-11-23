@@ -184,6 +184,9 @@ def webhook_receiver() -> Iterator[tuple[str, Path]]:
 
     with tempfile.TemporaryDirectory() as directory:
         output_dir = Path(directory)
+        # Образ работает от непривилегированного UID 10001: каталог для тела
+        # webhook должен быть ему доступен на запись.
+        os.chmod(output_dir, 0o777)
         webhook_file = output_dir / "webhook.json"
 
         docker("rm", "-f", container_name, check=False)

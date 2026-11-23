@@ -9,6 +9,7 @@ import pytest
 from payment_service.infrastructure.webhook import (
     HttpxWebhookSender,
     WebhookDestinationForbidden,
+    _default_resolver,
 )
 
 
@@ -127,6 +128,18 @@ async def test_unresolvable_host_is_a_network_error() -> None:
         await sender.send("https://merchant.example/webhook", {})
 
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_resolver_uses_event_loop_getaddrinfo() -> None:
+    # localhost резолвится локально; проверяет, что default resolver реально
+    # работает (а не только подменённый в остальных тестах).
+    addresses = await _default_resolver("localhost", 8000)
+
+    assert addresses
+    assert any(
+        address in {"127.0.0.1", "::1"} for address in addresses
+    )
 
 
 @pytest.mark.asyncio

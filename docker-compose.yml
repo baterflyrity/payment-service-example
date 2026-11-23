@@ -80,6 +80,7 @@ services:
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-payments}"
       RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS in .env}@rabbitmq:5672/"
       API_KEY: ${API_KEY:?Set API_KEY in .env}
+      WEBHOOK_ALLOW_HTTP: ${WEBHOOK_ALLOW_HTTP:-false}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

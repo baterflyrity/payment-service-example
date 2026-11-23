@@ -325,7 +325,7 @@ RABBITMQ_URL=amqp://payments:change-me@127.0.0.1:25672/ uv run pytest -m rabbit 
 
 # e2e-сценарий против поднятого compose (POST → succeeded|failed → webhook)
 # Приёмник webhook живёт в сети compose, поэтому до запуска стека разрешите
-# его хост (имя контейнера) и http в consumer:
+# http для api/consumer и хост приёмника (имя контейнера) для consumer:
 #   WEBHOOK_ALLOW_HTTP=true
 #   WEBHOOK_ALLOWED_HOSTS=e2e-webhook-receiver
 # в .env, затем `docker compose up -d --build`.

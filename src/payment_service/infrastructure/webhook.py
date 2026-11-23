@@ -59,7 +59,8 @@ def _is_forbidden_address(address: str) -> bool:
 async def _default_resolver(host: str, port: int) -> list[str]:
     """Резолвит хост в список IP-адресов через ``asyncio.getaddrinfo``."""
 
-    infos = await asyncio.getaddrinfo(
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(
         host,
         port,
         type=socket.SOCK_STREAM,
