@@ -6,6 +6,3 @@ __pycache__/
 .coverage
 htmlcov/
 .idea/
-
-# Project exclude paths
-/alembic/
