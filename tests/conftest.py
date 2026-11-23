@@ -1,7 +1,13 @@
-import pytest
-from pydantic import SecretStr
+import os
 
-from payment_service.config import settings
+# Settings() валидируется при импорте и требует сильный API_KEY. Unit-тесты не
+# должны зависеть от локального .env, поэтому задаём тестовый ключ заранее.
+os.environ.setdefault("API_KEY", "test-api-key-0123456789abcdef0123456789abcdef")
+
+import pytest  # noqa: E402
+from pydantic import SecretStr  # noqa: E402
+
+from payment_service.config import settings  # noqa: E402
 
 
 @pytest.fixture
