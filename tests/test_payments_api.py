@@ -5,6 +5,8 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from payment_service.api.main import app as fastapi_app
+from payment_service.entrypoints.api import health as health_module
 from payment_service.infrastructure.db.orm import OutboxORM as Outbox
 from payment_service.infrastructure.db.orm import PaymentORM as Payment
 
@@ -129,7 +131,9 @@ async def test_get_unknown_payment_returns_404(
     )
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Payment not found"
+    assert response.json() == {
+        "error": {"code": "not_found", "message": "Payment not found"},
+    }
 
 
 @pytest.mark.asyncio
@@ -186,7 +190,9 @@ async def test_reusing_key_with_different_data_returns_409(
 
     assert first.status_code == 202
     assert second.status_code == 409
-    assert "different request data" in second.json()["detail"]
+    body = second.json()
+    assert body["error"]["code"] == "idempotency_conflict"
+    assert "different request data" in body["error"]["message"]
 
     payment_count = await db_connection.scalar(
         select(func.count()).select_from(Payment),
@@ -199,6 +205,14 @@ async def test_reusing_key_with_different_data_returns_409(
     assert outbox_count == 1
 
 
+API_KEY_ERROR = {
+    "error": {
+        "code": "unauthorized",
+        "message": "Invalid or missing API key",
+    },
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "path"),
@@ -207,22 +221,28 @@ async def test_reusing_key_with_different_data_returns_409(
         ("POST", PAYMENTS_URL),
     ],
 )
+@pytest.mark.parametrize("api_key_header", [None, "wrong-api-key"])
 async def test_api_key_is_required(
     client: AsyncClient,
     method: str,
     path: str,
+    api_key_header: str | None,
 ) -> None:
+    headers = {"Idempotency-Key": "unauthorized-test"}
+    if api_key_header is not None:
+        headers["X-API-Key"] = api_key_header
+
     if method == "POST":
         response = await client.post(
             path,
-            headers={"Idempotency-Key": "unauthorized-test"},
+            headers=headers,
             json=make_payload(),
         )
     else:
-        response = await client.get(path)
+        response = await client.get(path, headers=headers)
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or missing API key"
+    assert response.json() == API_KEY_ERROR
 
 
 @pytest.mark.asyncio
@@ -247,6 +267,9 @@ async def test_invalid_payload_returns_422(
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "validation_error"
+    assert body["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -261,3 +284,52 @@ async def test_idempotency_key_is_required(
     )
 
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_health_is_public(client: AsyncClient) -> None:
+    response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_database_state(client: AsyncClient) -> None:
+    async def database_ok() -> None:
+        return None
+
+    app = fastapi_app
+    app.dependency_overrides[health_module.get_database_check] = lambda: database_ok
+    try:
+        ready = await client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(health_module.get_database_check, None)
+
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready", "database": "ok"}
+
+    async def database_down() -> None:
+        raise ConnectionError("database is down")
+
+    app.dependency_overrides[health_module.get_database_check] = lambda: database_down
+    try:
+        not_ready = await client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(health_module.get_database_check, None)
+
+    assert not_ready.status_code == 503
+    assert not_ready.json()["error"]["code"] == "not_ready"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/docs", "/openapi.json"])
+async def test_docs_are_disabled_by_default(
+    client: AsyncClient,
+    path: str,
+) -> None:
+    response = await client.get(path)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"

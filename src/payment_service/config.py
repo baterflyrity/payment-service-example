@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
     api_key: SecretStr = SecretStr("jhA4bsjJK5hdbf6")
 
+    # Interactive docs expose the full API surface without an API key, so they
+    # are disabled by default. Enable them only for local development.
+    enable_docs: bool = False
+
     outbox_poll_interval_seconds: float = 1.0
     outbox_batch_size: int = 100
 

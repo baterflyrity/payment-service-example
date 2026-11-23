@@ -8,6 +8,6 @@
 | T04 | Сервис приложения CreatePayment / GetPayment, тонкий роутер | T03 | [x] |
 | T05 | Outbox relay через UoW, отдельный процесс | T03 | [x] |
 | T06 | Сервис обработки платежа + consumer (FastStream), exchanges, retry, DLQ | T03, T05 | [x] |
-| T07 | Auth на всех эндпоинтах, health, обработка ошибок | T04 | [ ] |
+| T07 | Auth на всех эндпоинтах, health, обработка ошибок | T04 | [x] |
 | T08 | Тесты: unit (fake UoW) + интеграционные + e2e smoke в compose | T04–T07 | [ ] |
 | T09 | README и финальная проверка «с чистого клона» | все | [ ] |

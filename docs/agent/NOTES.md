@@ -27,3 +27,10 @@
 - В compose у `consumer` остались неиспользуемые `OUTBOX_POLL_INTERVAL_SECONDS`, `OUTBOX_BATCH_SIZE`, `API_KEY` и зависимость от healthy `api`. Команда consumer обновлена на `payment_service.entrypoints.consumer:app`; чистка env/depends_on — T09.
 - Старые durable-очереди `payments.retry.2s`/`payments.retry.4s` из предыдущей реализации могут остаться в томе RabbitMQ; новый код использует `payments.retry.1`/`payments.retry.2`. На чистых окружениях не проявляется, но при обновлении существующего тома старые очереди стоит удалить вручную.
 - `docker compose build` нового consumer в T06 не проверялся (в границы входил только код и тесты против реального RabbitMQ); сборка образа и e2e — T08/T09.
+
+## T07
+- Добавлен флаг `ENABLE_DOCS` (по умолчанию `false`, `/docs`, `/redoc`, `/openapi.json` отключены). Его нужно описать в `.env.example` и README (T09), вместе с эндпоинтами `/health` и `/health/ready` и форматом ошибок `{"error": {"code", "message"}}`.
+- Для readiness-проверки в `infrastructure/db/session.py` добавлена функция `ping_database()`: держать импорт `sqlalchemy` в `entrypoints/api` нельзя (F2), поэтому проверка живёт в infrastructure, а API получает её через зависимость `get_database_check` (подменяется в тестах).
+- `X-API-Key` теперь проверяется одинаково на всех эндпоинтах платежей; `/health` и `/health/ready` намеренно публичные.
+- В compose healthcheck `api` переведён на `/health`; у `consumer` по-прежнему неиспользуемые env и зависимость от healthy `api` (см. T06) — T09.
+- В тестах `/health/ready` проверяется через overrides зависимости, без реального подключения к БД; интеграционная проверка readiness на живой БД остаётся на T08/T09.

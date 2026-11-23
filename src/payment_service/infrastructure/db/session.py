@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -23,3 +24,10 @@ SessionFactory = async_sessionmaker(
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with SessionFactory() as session:
         yield session
+
+
+async def ping_database() -> None:
+    """Readiness-проверка: выполнить минимальный запрос к БД."""
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
