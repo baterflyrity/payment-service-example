@@ -22,3 +22,8 @@
 - Старый `tests/test_outbox_publisher.py` (прямые SQL-запросы) удалён вместе с `workers/outbox_publisher.py`. SQL-поведение `lock_unpublished`/`mark_published`/`mark_failed` покрыто `tests/integration/test_repositories.py`, сам relay — unit-тестами на fakes.
 - `application/relay_outbox.py` восстанавливает `PaymentCreated` из payload outbox; payload обязан содержать `payment_id` и `occurred_at` в ISO-формате (так пишет `SqlAlchemyOutboxRepository.add`).
 - `docker compose ps/config` по-прежнему требуют `API_KEY` (pre-existing, T03).
+
+## T06
+- В compose у `consumer` остались неиспользуемые `OUTBOX_POLL_INTERVAL_SECONDS`, `OUTBOX_BATCH_SIZE`, `API_KEY` и зависимость от healthy `api`. Команда consumer обновлена на `payment_service.entrypoints.consumer:app`; чистка env/depends_on — T09.
+- Старые durable-очереди `payments.retry.2s`/`payments.retry.4s` из предыдущей реализации могут остаться в томе RabbitMQ; новый код использует `payments.retry.1`/`payments.retry.2`. На чистых окружениях не проявляется, но при обновлении существующего тома старые очереди стоит удалить вручную.
+- `docker compose build` нового consumer в T06 не проверялся (в границы входил только код и тесты против реального RabbitMQ); сборка образа и e2e — T08/T09.

@@ -12,7 +12,7 @@ from payment_service.application.relay_outbox import RelayOutboxService
 from payment_service.config import settings
 from payment_service.container import make_unit_of_work
 from payment_service.infrastructure.messaging.publisher import FastStreamEventPublisher
-from payment_service.messaging.topology import (
+from payment_service.infrastructure.messaging.topology import (
     PAYMENTS_EXCHANGE,
     PAYMENTS_NEW_QUEUE,
     PAYMENTS_NEW_ROUTING_KEY,

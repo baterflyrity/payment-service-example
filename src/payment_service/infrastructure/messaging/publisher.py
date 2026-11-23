@@ -3,7 +3,7 @@ from __future__ import annotations
 from faststream.rabbit import RabbitBroker
 
 from payment_service.domain.events import PaymentCreated
-from payment_service.messaging.topology import (
+from payment_service.infrastructure.messaging.topology import (
     PAYMENTS_EXCHANGE,
     PAYMENTS_NEW_ROUTING_KEY,
 )
