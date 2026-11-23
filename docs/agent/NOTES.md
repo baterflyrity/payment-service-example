@@ -34,3 +34,9 @@
 - `X-API-Key` теперь проверяется одинаково на всех эндпоинтах платежей; `/health` и `/health/ready` намеренно публичные.
 - В compose healthcheck `api` переведён на `/health`; у `consumer` по-прежнему неиспользуемые env и зависимость от healthy `api` (см. T06) — T09.
 - В тестах `/health/ready` проверяется через overrides зависимости, без реального подключения к БД; интеграционная проверка readiness на живой БД остаётся на T08/T09.
+
+## T08
+- Тесты разделены: `tests/unit` (без БД), `tests/integration` (PostgreSQL; фикстуры в `tests/integration/conftest.py`), `tests/e2e` (поднятый compose). Маркеры `integration`, `rabbit`, `e2e` объявлены в `pyproject.toml`.
+- E2E-тест (`tests/e2e/test_flow.py`) требует уже запущенный стек и `API_KEY`, совпадающий с `E2E_API_KEY` (или `API_KEY`); при отсутствии docker/сервиса `consumer` он пропускается. Для README (T09): команды `docker compose up -d --build`, `E2E_API_KEY=... pytest -m e2e -q`, а также `RABBITMQ_URL=amqp://payments:payments@127.0.0.1:25672/ pytest -m rabbit`.
+- Pre-existing: `docker compose ps/logs/stop` и `config` падают без переменной `API_KEY` из-за `${API_KEY:?...}` — при работе с инфраструктурой задавать `API_KEY=...`. Чистка env/`depends_on` у `consumer` остаётся на T09.
+- `ruff format --check` расходится с текущим кодом в части существующих файлов; проект использует `ruff check`, форматирование в DoD не входило.

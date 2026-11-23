@@ -20,6 +20,8 @@ from payment_service.domain import (
 )
 from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
+pytestmark = pytest.mark.integration
+
 
 @pytest_asyncio.fixture
 async def session_factory(

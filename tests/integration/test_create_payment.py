@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
@@ -12,9 +14,14 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from payment_service.api.main import app
+from payment_service.application.commands import CreatePaymentCommand
+from payment_service.application.create_payment import CreatePaymentService
 from payment_service.container import get_unit_of_work_factory
+from payment_service.domain.payment import Currency
 from payment_service.infrastructure.db.orm import OutboxORM, PaymentORM
 from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+pytestmark = pytest.mark.integration
 
 PAYMENTS_URL = "/api/v1/payments"
 
@@ -54,6 +61,47 @@ def make_payload() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
+class CommitFailingUnitOfWork(SqlAlchemyUnitOfWork):
+    """UoW, падающий на commit после записи платежа и outbox-события."""
+
+    async def commit(self) -> None:
+        raise RuntimeError("commit failed after payment and outbox were written")
+
+
+async def test_commit_failure_rolls_back_payment_and_outbox(
+    test_engine: AsyncEngine,
+) -> None:
+    """Ошибка после ``outbox.add`` до commit не оставляет ни платежа, ни события."""
+
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    service = CreatePaymentService(
+        uow_factory=lambda: CommitFailingUnitOfWork(session_factory),
+        clock=lambda: datetime(2026, 11, 23, 12, 0, tzinfo=UTC),
+    )
+    command = CreatePaymentCommand(
+        amount=Decimal("10.00"),
+        currency=Currency.RUB,
+        description="Atomicity test",
+        webhook_url="https://example.com/webhooks/payments",
+        idempotency_key="atomicity-failure",
+        metadata={"order_id": "order-atomic"},
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await service.execute(command)
+
+    async with AsyncSession(test_engine) as session:
+        payment_count = await session.scalar(
+            select(func.count()).select_from(PaymentORM),
+        )
+        outbox_count = await session.scalar(
+            select(func.count()).select_from(OutboxORM),
+        )
+
+    assert payment_count == 0
+    assert outbox_count == 0
+
+
 async def test_parallel_posts_with_same_key_create_one_payment_and_event(
     real_client: AsyncClient,
     api_key: str,

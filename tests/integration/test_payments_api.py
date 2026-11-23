@@ -10,6 +10,8 @@ from payment_service.entrypoints.api import health as health_module
 from payment_service.infrastructure.db.orm import OutboxORM as Outbox
 from payment_service.infrastructure.db.orm import PaymentORM as Payment
 
+pytestmark = pytest.mark.integration
+
 PAYMENTS_URL = "/api/v1/payments"
 
 

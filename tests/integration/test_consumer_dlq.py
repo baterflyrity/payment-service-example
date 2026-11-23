@@ -21,7 +21,7 @@ from payment_service.infrastructure.messaging.topology import (
     declare_topology,
 )
 
-pytestmark = pytest.mark.rabbit
+pytestmark = [pytest.mark.integration, pytest.mark.rabbit]
 
 DLQ_TIMEOUT_SECONDS = 20.0
 # Первая попытка + TTL retry.1 (2 с) + TTL retry.2 (4 с).
