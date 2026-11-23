@@ -15,3 +15,10 @@
 - `OutboxORM.event_type` теперь `payment.created` (значение `PaymentCreated.event_type` из T02); старый роутер писал `payments.new`. Публикация и consumer читают только payload, но при анализе outbox стоит учитывать новое значение.
 - В окружении нет `setfacl`, поэтому default ACL на каталоги не настроить: файлы, созданные контейнером от root с umask 022, нужно нормализовать (`chown user:root` + `chmod g+rw`) после запуска контейнера.
 - `CreatePaymentService` делает два UoW на успешный запрос (поиск ключа, затем вставка) — как предписано ARCHITECTURE. При необходимости оптимизировать (один UoW с повторной сверкой) — отдельная задача.
+
+## T05
+- Exchange `payments` (direct) объявлен в `messaging/topology.py`, очередь `payments.new` привязывается к нему relay-процессом по routing key `payments.new`. Consumer (T06) должен подписываться на очередь через этот exchange и не переобъявлять её с другими аргументами.
+- В compose у `consumer` остались неиспользуемые `OUTBOX_POLL_INTERVAL_SECONDS`/`OUTBOX_BATCH_SIZE`, а также зависимость от healthy `api` (см. T01). Вне границ T05 — чистить в T06/T09.
+- Старый `tests/test_outbox_publisher.py` (прямые SQL-запросы) удалён вместе с `workers/outbox_publisher.py`. SQL-поведение `lock_unpublished`/`mark_published`/`mark_failed` покрыто `tests/integration/test_repositories.py`, сам relay — unit-тестами на fakes.
+- `application/relay_outbox.py` восстанавливает `PaymentCreated` из payload outbox; payload обязан содержать `payment_id` и `occurred_at` в ISO-формате (так пишет `SqlAlchemyOutboxRepository.add`).
+- `docker compose ps/config` по-прежнему требуют `API_KEY` (pre-existing, T03).

@@ -1,4 +1,12 @@
-from faststream.rabbit import RabbitQueue
+from faststream.rabbit import ExchangeType, RabbitExchange, RabbitQueue
+
+PAYMENTS_EXCHANGE = RabbitExchange(
+    name="payments",
+    type=ExchangeType.DIRECT,
+    durable=True,
+)
+
+PAYMENTS_NEW_ROUTING_KEY = "payments.new"
 
 PAYMENTS_NEW_QUEUE = RabbitQueue(
     name="payments.new",

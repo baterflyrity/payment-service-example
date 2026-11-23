@@ -69,8 +69,6 @@ services:
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
       RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:-payments}@rabbitmq:5672/"
       API_KEY: ${API_KEY:?Set API_KEY in .env}
-      OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1.0}
-      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -90,6 +88,27 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    restart: unless-stopped
+
+  outbox-relay:
+    build:
+      context: .
+    command:
+      - python
+      - -m
+      - payment_service.entrypoints.outbox_relay
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-payments}:${POSTGRES_PASSWORD:-payments}@postgres:5432/${POSTGRES_DB:-payments}"
+      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-payments}:${RABBITMQ_DEFAULT_PASS:-payments}@rabbitmq:5672/"
+      OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1.0}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     restart: unless-stopped
 
   consumer:
