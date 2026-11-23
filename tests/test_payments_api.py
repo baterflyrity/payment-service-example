@@ -5,7 +5,8 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from payment_service.models import Outbox, Payment
+from payment_service.infrastructure.db.orm import OutboxORM as Outbox
+from payment_service.infrastructure.db.orm import PaymentORM as Payment
 
 PAYMENTS_URL = "/api/v1/payments"
 

@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from payment_service.models import Payment
+from payment_service.infrastructure.db.orm import PaymentORM as Payment
 from payment_service.schemas.events import PaymentCreatedEvent
 from payment_service.services.payment_processor import process_payment_event
 

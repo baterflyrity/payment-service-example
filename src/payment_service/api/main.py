@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from payment_service.api.payments import router as payments_router
-from payment_service.db import engine
+from payment_service.infrastructure.db.session import engine
 from payment_service.workers.outbox_publisher import run_outbox_publisher
 
 

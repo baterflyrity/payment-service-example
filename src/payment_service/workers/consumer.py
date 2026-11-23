@@ -7,7 +7,7 @@ from faststream import AckPolicy, FastStream
 from faststream.rabbit import Channel, RabbitBroker, RabbitMessage
 
 from payment_service.config import settings
-from payment_service.db import SessionFactory
+from payment_service.infrastructure.db.session import SessionFactory
 from payment_service.messaging.topology import (
     MAX_PROCESSING_ATTEMPTS,
     PAYMENTS_DLQ,

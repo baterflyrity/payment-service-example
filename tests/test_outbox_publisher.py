@@ -7,7 +7,7 @@ from faststream.rabbit import RabbitBroker
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from payment_service.models import Outbox
+from payment_service.infrastructure.db.orm import OutboxORM as Outbox
 from payment_service.workers.outbox_publisher import publish_outbox_batch
 
 

@@ -23,7 +23,7 @@ class PaymentCreated:
 class OutboxMessage:
     """Запись outbox, подготовленная репозиторием к публикации."""
 
-    id: int
+    id: UUID
     event_id: UUID
     event_type: str
     payload: dict[str, Any]

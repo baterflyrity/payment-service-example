@@ -7,9 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from payment_service.config import settings
-from payment_service.db import SessionFactory
+from payment_service.infrastructure.db.orm import OutboxORM as Outbox
+from payment_service.infrastructure.db.session import SessionFactory
 from payment_service.messaging.topology import PAYMENTS_NEW_QUEUE
-from payment_service.models import Outbox
 
 logger = logging.getLogger(__name__)
 

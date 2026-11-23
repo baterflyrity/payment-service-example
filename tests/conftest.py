@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import (
 
 from payment_service.api.main import app
 from payment_service.config import settings
-from payment_service.db import get_session
-from payment_service.models import Base
+from payment_service.infrastructure.db.orm import Base
+from payment_service.infrastructure.db.session import get_session
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",

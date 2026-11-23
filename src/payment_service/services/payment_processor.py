@@ -9,8 +9,8 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from payment_service.db import SessionFactory
-from payment_service.models import Payment
+from payment_service.infrastructure.db.orm import PaymentORM as Payment
+from payment_service.infrastructure.db.session import SessionFactory
 from payment_service.schemas.events import PaymentCreatedEvent
 
 PaymentResult = Literal["succeeded", "failed"]

@@ -7,8 +7,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from payment_service.api.dependencies import require_api_key
-from payment_service.db import get_session
-from payment_service.models import Outbox, Payment
+from payment_service.infrastructure.db.orm import OutboxORM as Outbox
+from payment_service.infrastructure.db.orm import PaymentORM as Payment
+from payment_service.infrastructure.db.session import get_session
 from payment_service.schemas.payment import (
     PaymentCreate,
     PaymentCreated,
