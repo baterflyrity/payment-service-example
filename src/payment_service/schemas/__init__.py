@@ -1,11 +1,3 @@
-from payment_service.schemas.payment import (
-    PaymentCreate,
-    PaymentCreated,
-    PaymentDetail,
-)
+from payment_service.schemas.events import PaymentCreatedEvent
 
-__all__ = [
-    "PaymentCreate",
-    "PaymentCreated",
-    "PaymentDetail",
-]
+__all__ = ["PaymentCreatedEvent"]

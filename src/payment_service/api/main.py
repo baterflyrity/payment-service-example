@@ -1,39 +1,9 @@
-import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+"""Совместимость: приложение собрано в ``entrypoints/api/app.py``.
 
-from fastapi import FastAPI
+Путь ``payment_service.api.main:app`` используется Dockerfile и compose;
+перенос точки входа — в T09.
+"""
 
-from payment_service.api.payments import router as payments_router
-from payment_service.infrastructure.db.session import engine
-from payment_service.workers.outbox_publisher import run_outbox_publisher
+from payment_service.entrypoints.api.app import app
 
-
-@asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    stop_event = asyncio.Event()
-
-    publisher_task = asyncio.create_task(
-        run_outbox_publisher(stop_event),
-        name="outbox-publisher",
-    )
-
-    try:
-        yield
-    finally:
-        stop_event.set()
-
-        try:
-            await publisher_task
-        finally:
-            await engine.dispose()
-
-
-app = FastAPI(
-    title="Payment Processing Service Example",
-    description="Asynchronous payment processing API",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-app.include_router(payments_router)
+__all__ = ["app"]

@@ -5,7 +5,7 @@
 | T01 | Alembic-миграции в репозитории, починка Docker-сборки | — | [x] |
 | T02 | Доменный слой (сущности, value objects, ошибки, порты) | — | [x] |
 | T03 | Инфраструктура БД: ORM-маппинг, репозитории, Unit of Work | T01, T02 | [x] |
-| T04 | Сервис приложения CreatePayment / GetPayment, тонкий роутер | T03 | [ ] |
+| T04 | Сервис приложения CreatePayment / GetPayment, тонкий роутер | T03 | [x] |
 | T05 | Outbox relay через UoW, отдельный процесс | T03 | [ ] |
 | T06 | Сервис обработки платежа + consumer (FastStream), exchanges, retry, DLQ | T03, T05 | [ ] |
 | T07 | Auth на всех эндпоинтах, health, обработка ошибок | T04 | [ ] |

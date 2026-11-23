@@ -1,9 +1,10 @@
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 Currency = Literal["RUB", "USD", "EUR"]
 PaymentStatus = Literal["pending", "succeeded", "failed"]
@@ -27,6 +28,15 @@ class PaymentCreate(BaseModel):
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
     webhook_url: HttpUrl
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_must_be_json_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("metadata must contain valid JSON values") from exc
+        return value
 
 
 class PaymentCreated(BaseModel):

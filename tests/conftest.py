@@ -9,14 +9,15 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
-    AsyncSession,
+    async_sessionmaker,
     create_async_engine,
 )
 
 from payment_service.api.main import app
 from payment_service.config import settings
+from payment_service.container import get_unit_of_work_factory
 from payment_service.infrastructure.db.orm import Base
-from payment_service.infrastructure.db.session import get_session
+from payment_service.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -86,15 +87,16 @@ async def client(
 ) -> AsyncIterator[AsyncClient]:
     """Provide an HTTP client connected to the test application."""
 
-    async def override_get_session() -> AsyncIterator[AsyncSession]:
-        async with AsyncSession(
-            bind=db_connection,
-            expire_on_commit=False,
-            join_transaction_mode="create_savepoint",
-        ) as session:
-            yield session
+    test_session_factory = async_sessionmaker(
+        bind=db_connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
 
-    app.dependency_overrides[get_session] = override_get_session
+    def make_uow() -> SqlAlchemyUnitOfWork:
+        return SqlAlchemyUnitOfWork(test_session_factory)
+
+    app.dependency_overrides[get_unit_of_work_factory] = lambda: make_uow
 
     try:
         async with AsyncClient(
@@ -103,4 +105,4 @@ async def client(
         ) as async_client:
             yield async_client
     finally:
-        app.dependency_overrides.pop(get_session, None)
+        app.dependency_overrides.pop(get_unit_of_work_factory, None)

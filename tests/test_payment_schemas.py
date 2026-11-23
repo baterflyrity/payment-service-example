@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from payment_service.schemas.payment import PaymentCreate
+from payment_service.entrypoints.api.schemas import PaymentCreate
 
 
 def make_payload(**overrides: object) -> PaymentCreate:
@@ -45,3 +45,8 @@ def test_rejects_unsupported_currency() -> None:
 def test_rejects_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         make_payload(unexpected_field="value")
+
+
+def test_rejects_non_json_safe_metadata() -> None:
+    with pytest.raises(ValidationError):
+        make_payload(metadata={"amount": float("nan")})

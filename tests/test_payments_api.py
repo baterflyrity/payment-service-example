@@ -82,7 +82,7 @@ async def test_create_payment_returns_202_and_writes_outbox(
         )
     ).one()
 
-    assert event.event_type == "payments.new"
+    assert event.event_type == "payment.created"
     assert event.aggregate_id == payment_id
     assert event.payload["payment_id"] == str(payment_id)
 
